@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+N:;;;;
+FN:Contact1
+EMAIL;TYPE=INTERNET:Contact1@example.com
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+N:;;;;
+FN:Contact2
+EMAIL;TYPE=INTERNET:Contact2@example.com
+END:VCARD
