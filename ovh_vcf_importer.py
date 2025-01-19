@@ -5,8 +5,10 @@ import configparser
 import os
 import re
 import sys
+import time
 
 from selenium import webdriver
+from selenium.common import ElementClickInterceptedException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.ie.webdriver import WebDriver
@@ -19,6 +21,8 @@ URL_CONFIGURATION_PROPERTY: str = 'url'
 EMAIL_CONFIGURATION_PROPERTY: str = 'mail'
 PASSWORD_CONFIGURATION_PROPERTY: str = 'pass'
 VCF_FILE_CONFIGURATION_PROPERTY: str = 'vcf_file'
+CAPITALIZE_FIRSTNAME_CONFIGURATION_PROPERTY: str = 'capitalize_firstname'
+CAPITALIZE_LASTNAME_CONFIGURATION_PROPERTY: str = 'capitalize_lastname'
 # Labels keys
 LOGOUT_LABEL: str  = 'logout'
 NEW_LABEL: str = 'new'
@@ -36,6 +40,7 @@ SAVE_LABEL: str = 'save'
 account_configuration_dict: dict = {}
 labels_dict: dict = {}
 dry_run: bool = False
+verbose: bool = False
 
 class Contact(object):
     def __init__(self):
@@ -84,29 +89,28 @@ def add_contact(driver: WebDriver, contact: Contact) -> None:
         lastname = contact.name
     # firstname
     if firstname is not None and len(firstname) > 0:
-        firstname = firstname.lower().capitalize()
+        if CAPITALIZE_FIRSTNAME_CONFIGURATION_PROPERTY in account_configuration_dict and 'true' == account_configuration_dict[CAPITALIZE_FIRSTNAME_CONFIGURATION_PROPERTY].lower():
+            firstname = firstname.lower().capitalize()
         elt = find_element_in_parent(driver, popup_elt, By.XPATH, "//input[@aria-label='%s']" % labels_dict[FIRSTNAME_LABEL])
         elt.click()
-        print("Using firstname: " + firstname)
         elt.send_keys(firstname)
     # lastname
     if lastname is not None and len(lastname) > 0:
+        if CAPITALIZE_LASTNAME_CONFIGURATION_PROPERTY in account_configuration_dict and 'true' == account_configuration_dict[CAPITALIZE_LASTNAME_CONFIGURATION_PROPERTY].lower():
+            lastname = lastname.lower().capitalize()
         elt = find_element_in_parent(driver, popup_elt, By.XPATH, "//input[@role='textbox' and @aria-label='%s']" % labels_dict[LASTNAME_LABEL])
         elt.click()
-        print("Using lastname: " + lastname)
         elt.send_keys(lastname)
     # email
     if contact.email is not None and len(contact.email) > 0:
         elt = find_element_in_parent(driver, popup_elt, By.XPATH, "//input[@role='textbox' and @aria-label='%s']" % labels_dict[EMAIL_ADDRESS_LABEL])
         elt.click()
-        print("Using email: " + contact.email)
         elt.send_keys(contact.email)
     # phone number
     if contact.phone_number is not None and len(contact.phone_number) > 0:
         parent_elt = find_element_in_parent(driver, popup_elt, By.XPATH, "//span[text()='%s']" % labels_dict[PHONE_NUMBER_LABEL])
         elt = find_element_in_parent(driver, parent_elt, By.XPATH, "//input[@role='textbox' and @aria-label='%s']" % labels_dict[WORK_LABEL])
         elt.click()
-        print("Using phone number: " + contact.phone_number)
         elt.send_keys(firstname)
     if dry_run:
         elt = find_element(driver, By.XPATH, "(//span[text()='%s'])[2]" % labels_dict[CANCEL_LABEL])
@@ -118,7 +122,8 @@ def add_contact(driver: WebDriver, contact: Contact) -> None:
         elt.click()
 
 def find_element(driver: WebDriver, by: By, value: str) -> WebElement:
-    print("Searching element by: %s, value: %s" % (by, value))
+    if verbose:
+        print("Searching element by: %s, value: %s" % (by, value))
     return WebDriverWait(driver, 10).until(
         expected_conditions.visibility_of_element_located((by.__str__(), value))
     )
@@ -126,7 +131,8 @@ def find_element(driver: WebDriver, by: By, value: str) -> WebElement:
 
 # noinspection PyUnusedLocal
 def find_element_in_parent(driver: WebDriver, parent: WebElement, by: By, value: str) -> WebElement:
-    print("Searching element by: %s, value: %s" % (by, value))
+    if verbose:
+        print("Searching element by: %s, value: %s" % (by, value))
     return parent.find_element(by, value)
 
 
@@ -166,10 +172,12 @@ def main():
     global dry_run
     parser = argparse.ArgumentParser(prog='ovh_vcf_importer', description='OVH Emails Pro VCF import')
     parser.add_argument('-d', action='store_true', help="Dry run flag")
+    parser.add_argument('-v', action='store_true', help="Verbose flag")
     parser.add_argument('--conf', required=True, help='The configuration file')
     parser.add_argument('--account', required=False, default="account", help='The account section to use (specified in the configuration file, default is \'account\')')
     args = parser.parse_args()
     dry_run = args.d
+    verbose = args.v
     if args.conf:
         configuration_parser = configparser.RawConfigParser()
         configuration_parser.read(args.conf)
@@ -195,8 +203,12 @@ def main():
             sys.exit(1)
         vcf_file: str = account_configuration_dict[VCF_FILE_CONFIGURATION_PROPERTY]
         if not os.path.exists(vcf_file):
-            print('VCard file specified in configuration does not exists: ' + vcf_file)
-            sys.exit(1)
+            vcf_file_2 = os.path.dirname(args.conf) + os.sep + vcf_file
+            if not os.path.exists(vcf_file_2):
+                print('VCard file specified in configuration does not exists: ' + vcf_file)
+                sys.exit(1)
+            else:
+                vcf_file = vcf_file_2
         count: int = 0
         driver: WebDriver = webdriver.Chrome()
         try:
@@ -221,14 +233,22 @@ def main():
             with open(vcf_file, 'r', encoding='UTF-8') as file:
                 # noinspection PyTypeChecker
                 contact: Contact = None
+                sleep_duration: int = 2
                 while line := file.readline():
                     if line.startswith('BEGIN:VCARD'):
                         contact = Contact()
                     elif contact is not None:
                         if line.startswith('END:VCARD'):
                             if contact.is_valid():
-                                add_contact(driver, contact)
-                                count += 1
+                                try:
+                                    add_contact(driver, contact)
+                                    count += 1
+                                except ElementClickInterceptedException as e:
+                                    if sleep_duration < 10:
+                                        sleep_duration += 1
+                                    add_contact(driver, contact)
+                                    count += 1
+                                time.sleep(sleep_duration)
                             else:
                                 print("Contact is not valid: " + str(contact))
                         elif line.startswith('N:'):
